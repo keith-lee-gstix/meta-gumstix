@@ -1,7 +1,7 @@
-From aa2ec981b84e1b8146f67fed3604bfebcdb84e01 Mon Sep 17 00:00:00 2001
+From d5e5ae812fea8a1e7d87e80755b7103eda201ccd Mon Sep 17 00:00:00 2001
 From: Keith Lee <keith.lee@gumstix.com>
-Date: Thu, 14 May 2020 11:48:03 -0700
-Subject: [PATCH] Add support for OV5640 OV5670 IMX214
+Date: Fri, 15 May 2020 15:59:49 -0700
+Subject: [PATCH] Add support for IMX214 OV5640 OV5670
 
 ---
  nvidia/drivers/media/i2c/Kconfig              |   29 +
@@ -13,10 +13,9 @@ Subject: [PATCH] Add support for OV5640 OV5670 IMX214
  nvidia/drivers/media/i2c/ov5670.c             | 1268 +++++++
  nvidia/drivers/media/i2c/ov5670_mode_tbls.h   | 2955 ++++++++++++++++
  .../platform/tegra/camera/camera_common.c     |    5 +
- .../platform/tegra/camera/sensor_common.c     |    2 +
+ .../platform/tegra/camera/sensor_common.c     |    4 +-
  nvidia/include/media/imx214.h                 |   91 +
  nvidia/include/media/ov5640.h                 |   87 +
- nvidia/include/media/ov56400.h                |   87 +
  nvidia/include/media/ov5670.h                 |   90 +
  nvidia/include/trace/events/imx214.h          |   45 +
  nvidia/include/trace/events/ov5640.h          |   45 +
@@ -24,7 +23,7 @@ Subject: [PATCH] Add support for OV5640 OV5670 IMX214
  nvidia/include/uapi/media/imx214.h            |  108 +
  nvidia/include/uapi/media/ov5640.h            |  113 +
  nvidia/include/uapi/media/ov5670.h            |  113 +
- 20 files changed, 10398 insertions(+), 738 deletions(-)
+ 19 files changed, 10312 insertions(+), 739 deletions(-)
  create mode 100755 nvidia/drivers/media/i2c/imx214_mode_tbls.h
  create mode 100644 nvidia/drivers/media/i2c/ov5640.c
  create mode 100755 nvidia/drivers/media/i2c/ov5640_mode_tbls.h
@@ -32,7 +31,6 @@ Subject: [PATCH] Add support for OV5640 OV5670 IMX214
  create mode 100755 nvidia/drivers/media/i2c/ov5670_mode_tbls.h
  create mode 100644 nvidia/include/media/imx214.h
  create mode 100644 nvidia/include/media/ov5640.h
- create mode 100644 nvidia/include/media/ov56400.h
  create mode 100644 nvidia/include/media/ov5670.h
  create mode 100644 nvidia/include/trace/events/imx214.h
  create mode 100644 nvidia/include/trace/events/ov5640.h
@@ -10891,7 +10889,7 @@ index dd2780f06f9e..2bee53a97b03 100644
  		MEDIA_BUS_FMT_SBGGR10_1X10,
  		V4L2_COLORSPACE_SRGB,
 diff --git a/nvidia/drivers/media/platform/tegra/camera/sensor_common.c b/nvidia/drivers/media/platform/tegra/camera/sensor_common.c
-index 75a3af2280f7..39813ade9744 100644
+index 75a3af2280f7..ed8deedb34b5 100644
 --- a/nvidia/drivers/media/platform/tegra/camera/sensor_common.c
 +++ b/nvidia/drivers/media/platform/tegra/camera/sensor_common.c
 @@ -202,6 +202,8 @@ static int extract_pixel_format(
@@ -10903,6 +10901,15 @@ index 75a3af2280f7..39813ade9744 100644
  	else if (strncmp(pixel_t, "bayer_bggr12", size) == 0)
  		*format = V4L2_PIX_FMT_SBGGR12;
  	else if (strncmp(pixel_t, "bayer_rggb12", size) == 0)
+@@ -393,7 +395,7 @@ static int sensor_common_parse_control_props(
+ 	err = read_property_u32(node, "exposure_factor", &value);
+ 	if (err) {
+ 		dev_err(dev, "%s:%s:property missing\n",
+-			__func__, "framerate_factor");
++			__func__, "exposure_factor");
+ 		control->exposure_factor = 1;
+ 	} else
+ 		control->exposure_factor = value;
 diff --git a/nvidia/include/media/imx214.h b/nvidia/include/media/imx214.h
 new file mode 100644
 index 000000000000..dcbf136f0473
@@ -11005,100 +11012,6 @@ new file mode 100644
 index 000000000000..a94464ef21da
 --- /dev/null
 +++ b/nvidia/include/media/ov5640.h
-@@ -0,0 +1,87 @@
-+/*
-+ * Copyright (c) 2013-2019, NVIDIA CORPORATION.  All rights reserved.
-+ *
-+ * This program is free software; you can redistribute it and/or modify it
-+ * under the terms and conditions of the GNU General Public License,
-+ * version 2, as published by the Free Software Foundation.
-+ *
-+ * This program is distributed in the hope it will be useful, but WITHOUT
-+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
-+ * more details.
-+ *
-+ * You should have received a copy of the GNU General Public License
-+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
-+ */
-+
-+#ifndef __OV5640_H__
-+#define __OV5640_H__
-+
-+#include <media/nvc.h>
-+#include <uapi/media/nvc_image.h>
-+#include <uapi/media/ov5640.h>
-+
-+#define OV5640_INVALID_COARSE_TIME  -1
-+
-+#define OV5640_EEPROM_ADDRESS		0x50
-+#define OV5640_EEPROM_SIZE		1024
-+#define OV5640_EEPROM_STR_SIZE		(OV5640_EEPROM_SIZE * 2)
-+#define OV5640_EEPROM_BLOCK_SIZE	(1 << 8)
-+#define OV5640_EEPROM_NUM_BLOCKS \
-+	(OV5640_EEPROM_SIZE / OV5640_EEPROM_BLOCK_SIZE)
-+
-+#define OV5640_OTP_LOAD_CTRL_ADDR	0x3D81
-+#define OV5640_OTP_BANK_SELECT_ADDR	0x3D84
-+#define OV5640_OTP_BANK_START_ADDR	0x3D00
-+#define OV5640_OTP_BANK_END_ADDR	0x3D0F
-+#define OV5640_OTP_NUM_BANKS		(32)
-+#define OV5640_OTP_BANK_SIZE \
-+	 (OV5640_OTP_BANK_END_ADDR - OV5640_OTP_BANK_START_ADDR + 1)
-+#define OV5640_OTP_SIZE \
-+	 (OV5640_OTP_BANK_SIZE * OV5640_OTP_NUM_BANKS)
-+#define OV5640_OTP_STR_SIZE (OV5640_OTP_SIZE * 2)
-+
-+/* See notes in the nvc.h file on the GPIO usage */
-+enum ov5640_gpio_type {
-+	OV5640_GPIO_TYPE_PWRDN = 0,
-+	OV5640_GPIO_TYPE_RESET,
-+};
-+
-+struct ov5640_eeprom_data {
-+	struct i2c_client *i2c_client;
-+	struct i2c_adapter *adap;
-+	struct i2c_board_info brd;
-+	struct regmap *regmap;
-+};
-+
-+struct ov5640_power_rail {
-+	struct regulator *dvdd;
-+	struct regulator *avdd;
-+	struct regulator *dovdd;
-+};
-+
-+struct ov5640_regulators {
-+	const char *avdd;
-+	const char *dvdd;
-+	const char *dovdd;
-+};
-+
-+struct ov5640_platform_data {
-+	unsigned cfg;
-+	unsigned num;
-+	const char *dev_name;
-+	unsigned gpio_count; /* see nvc.h GPIO notes */
-+	struct nvc_gpio_pdata *gpio; /* see nvc.h GPIO notes */
-+	struct nvc_imager_static_nvc *static_info;
-+	bool use_vcm_vdd;
-+	int (*probe_clock)(unsigned long);
-+	int (*power_on)(struct ov5640_power_rail *);
-+	int (*power_off)(struct ov5640_power_rail *);
-+	const char *mclk_name;
-+	struct nvc_imager_cap *cap;
-+	struct ov5640_regulators regulators;
-+	bool has_eeprom;
-+	bool use_cam_gpio;
-+};
-+
-+#endif  /* __OV5640_H__ */
-\ No newline at end of file
-diff --git a/nvidia/include/media/ov56400.h b/nvidia/include/media/ov56400.h
-new file mode 100644
-index 000000000000..a94464ef21da
---- /dev/null
-+++ b/nvidia/include/media/ov56400.h
 @@ -0,0 +1,87 @@
 +/*
 + * Copyright (c) 2013-2019, NVIDIA CORPORATION.  All rights reserved.
